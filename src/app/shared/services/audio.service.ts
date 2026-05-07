@@ -7,9 +7,6 @@ import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { PlaybackService } from './playback.service';
 import { RequestAudioData } from './playback.interface';
 
-import { getSynthesizeSpeechUrl } from '@aws-sdk/polly-request-presigner';
-import { PollyClient } from '@aws-sdk/client-polly';
-import { fromCognitoIdentityPool } from '@aws-sdk/credential-providers';
 import { AudioFeature, AudioItem, AudioSource, AudioStatus } from '../state/audio/audio.feature';
 import { AmazonPollyData, CustomUserVoice, MultiVoice, StreamlabsData, TikTokData, TtsMonsterData, TtsType } from '../state/config/config.feature';
 import { AudioActions } from '../state/audio/audio.actions';
@@ -19,12 +16,12 @@ import { ElevenLabsState } from '../state/eleven-labs/eleven-labs.feature';
 import { ElevenLabsService } from './eleven-labs.service';
 import { TwitchSettingsState } from '../state/twitch/twitch.feature';
 import { TwitchService } from './twitch.service';
-import { SynthesizeSpeechInput } from '@aws-sdk/client-polly/dist-types/models/models_0';
 import { AzureTtsService } from './azure-tts.service';
 import { AudioConfig, PullAudioOutputStream, SpeechSynthesisResult, SpeechSynthesizer } from 'microsoft-cognitiveservices-speech-sdk';
 import { AzureState } from '../state/azure/azure.feature';
 import { VTubeStudioService } from './vtubestudio.service';
 import { TriggeredExpression } from './vtubestudio.interface';
+import { AwsTtsService } from "./aws-tts.service";
 
 @Injectable()
 export class AudioService {
@@ -354,17 +351,7 @@ export class AudioService {
       case 'azure':
         return await this.handleAzureTts(text);
       case 'amazon-polly': {
-        const url = await this.handleAmazonPolly(text);
-
-        // If there was an issue getting the audio url.
-        if (!url) {
-          return null;
-        }
-
-        return {
-          type: 'amazonPolly',
-          url,
-        };
+        return await this.handleAmazonPolly(text);
       }
       case 'eleven-labs': {
         const url = `${this.elevenLabsService.apiUrl}/text-to-speech/${customUserVoice?.voice ?? this.elevenLabs.voiceId}`;
@@ -432,53 +419,24 @@ export class AudioService {
   }
 
   async handleAmazonPolly(audioText: string) {
-    if (!this.amazonPolly.poolId) {
-      this.snackbar.open(
-        `Oops! You didn't provide a Pool ID for Amazon Polly.`,
-        'Dismiss',
-        {
-          panelClass: 'notification-error',
-        },
-      );
-      return;
-    }
-
-    const pollyParams = {
-      OutputFormat: 'mp3',
-      SampleRate: '22050',
-      Text: audioText,
-      TextType: 'text',
-      VoiceId: this.amazonPolly.voice,
-    } satisfies SynthesizeSpeechInput;
-
     try {
-      const url = await getSynthesizeSpeechUrl({
-        client: new PollyClient({
-          region: this.amazonPolly.region,
-          credentials: fromCognitoIdentityPool({
-            clientConfig: {
-              region: this.amazonPolly.region,
-            },
-            identityPoolId: this.amazonPolly.poolId,
-          }),
-        }),
-        params: pollyParams,
-      });
-
-      return url.toString();
+      const ttsService = new AwsTtsService(this.amazonPolly, this.logService);
+      return {
+        type: 'amazonPolly',
+        url: await ttsService.getFileURI(audioText),
+      } satisfies RequestAudioData;
     } catch (e) {
       this.snackbar.open(
-        `Oops! We had issues communicating with Polly!`,
-        'Dismiss',
-        {
-          panelClass: 'notification-error',
-        },
+          `Oops! We had issues communicating with Polly!`,
+          'Dismiss',
+          {
+            panelClass: 'notification-error',
+          },
       );
-
-      this.logService.add(`Failed to get Amazon Polly url.\n${JSON.stringify(e)}`, 'error', 'AudioService.handleAmazonPolly');
-
-      return null;
+      this.logService.error(`Failed to get Amazon Polly url.\n${JSON.stringify(e)}`, 'AudioService.handleAmazonPolly');
+      this.logService.error(e as string, 'AudioService.handleAmazonPolly');
     }
+    return null;
   }
 
   addAudio(audio: AudioItem) {
