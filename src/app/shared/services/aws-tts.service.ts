@@ -2,6 +2,7 @@ import { getSynthesizeSpeechUrl } from '@aws-sdk/polly-request-presigner';
 import { PollyClient } from '@aws-sdk/client-polly';
 import { fromCognitoIdentityPool } from '@aws-sdk/credential-providers';
 import { SynthesizeSpeechInput } from '@aws-sdk/client-polly/dist-types/models/models_0';
+import { XhrHttpHandler } from "@aws-sdk/xhr-http-handler";
 
 import { AmazonPollyData } from "../state/config/config.feature";
 import { Logger } from "@smithy/types";
@@ -35,6 +36,7 @@ export class AwsTtsService {
                 region: this.pollyConfig.region,
                 logger: this.logger,
                 userAgentAppId: "TTS Helper",
+                requestHandler: new XhrHttpHandler(),
             },
             identityPoolId: this.pollyConfig.poolId.trim(),
         })();
@@ -57,6 +59,7 @@ export class AwsTtsService {
             logger: this.logger,
             region: this.pollyConfig.region,
             credentials: credentials,
+            requestHandler: new XhrHttpHandler(),
         });
 
         const url = await getSynthesizeSpeechUrl({
