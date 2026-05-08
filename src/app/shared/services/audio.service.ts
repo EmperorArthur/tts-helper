@@ -159,12 +159,12 @@ export class AudioService {
           ? filteredByWords
           : initialFilteredText;
 
-        const voices = this.parseMultiVoices(filteredText, multiVoices);
+        const voices = AudioService.parseMultiVoices(filteredText, multiVoices);
         const customUserVoice = customVoices.find(u => u.username.toLowerCase() === username.toLowerCase());
 
         // If we couldn't parse out any multi voices, let's assume it's a normal TTS request.
         if (!voices.length) {
-          const data = await this.getRequestData(filteredText, customUserVoice);
+          const data = await this.getRequestData(filteredText, customUserVoice?.voice, customUserVoice?.ttsType);
 
           return await this.playAudio(data, {
             username,
@@ -176,7 +176,7 @@ export class AudioService {
 
         // Otherwise... let's hope it WAS a multivoice request.
         for (const { text, voice, ttsType } of voices) {
-          const data = await this.getRequestData(text, { voice, ttsType });
+          const data = await this.getRequestData(text, voice, ttsType);
 
           await this.playAudio(data, {
             username,
@@ -231,42 +231,40 @@ export class AudioService {
       return this.logService.add(`Tried to get request data for invalid TTS: ${this.tts}`, 'error', 'AudioService.playTts');
     }
 
-    return this.playback
-      .playAudio({ data })
-      .then((id) => {
-        this.logService.add(`Queued TTS.\n${JSON.stringify({
-          text,
-          username,
-          charLimit,
-        }, null, 1)}`, 'info', 'AudioService.playTts');
+    try {
+      const id = await this.playback.playAudio({ data });
+      this.logService.add(`Queued TTS.\n${JSON.stringify({
+        text,
+        username,
+        charLimit,
+      }, null, 1)}`, 'info', 'AudioService.playTts');
 
-        if (triggeredExpressions.length > 0) {
-          this.pendingExpressions.set(id, triggeredExpressions);
-        }
+      if (triggeredExpressions.length > 0) {
+        this.pendingExpressions.set(id, triggeredExpressions);
+      }
 
-        this.addAudio({
-          id,
-          createdAt: new Date(),
-          source,
-          text,
-          username,
-          state: AudioStatus.queued,
-        });
-      })
-      .catch((e) => {
-        this.logService.add(`Failed to play TTS. \n ${JSON.stringify(e)}`, 'error', 'AudioService.playTts');
+      this.addAudio({
+        id,
+        createdAt: new Date(),
+        source,
+        text,
+        username,
+        state: AudioStatus.queued,
+      });
+    } catch (e) {
+      this.logService.add(`Failed to play TTS. \n ${JSON.stringify(e)}`, 'error', 'AudioService.playTts');
 
-        this.snackbar.open(
+      this.snackbar.open(
           `Failed to queue TTS request.`,
           'Dismiss',
           {
             panelClass: 'notification-error',
           },
-        );
-      });
+      );
+    }
   }
 
-  private parseMultiVoices(text: string, allowedMultiVoices: MultiVoice[]) {
+  private static parseMultiVoices(text: string, allowedMultiVoices: MultiVoice[]) {
     /**
      * To handle users doing the following:
      * (brian): Hello world I'm Brian! (ivy): My name is Ivy. (shadow): And I'm Shadow!
@@ -300,44 +298,47 @@ export class AudioService {
     return matches;
   }
 
-  playSoundFile(fileURL: string) {
+  public async playSoundFile(fileURL: string) {
     const base64EncodedPart = fileURL.split(',')[1];
 
-    this.playback.playAudio({
-      data: {
-        type: 'raw',
-        data: base64EncodedPart,
-      },
-    }).catch(e => {
+    try {
+      await this.playback.playAudio({
+        data: {
+          type: 'raw',
+          data: base64EncodedPart,
+        },
+      });
+    } catch (e) {
       this.logService.add(`Failed to play sound file. \n ${JSON.stringify(e)}`, 'error', 'AudioService.playSoundFile');
 
       this.snackbar.open(
-        'Oops! Issue playing sound file.',
-        'Dismiss',
-        {
-          panelClass: 'notification-error',
-        },
+          'Oops! Issue playing sound file.',
+          'Dismiss',
+          {
+            panelClass: 'notification-error',
+          },
       );
-    });
+    }
   }
 
   private async getRequestData(
     text: string,
-    customUserVoice?: Partial<CustomUserVoice>,
+    voice?: string,
+    ttsType?: TtsType,
   ): Promise<RequestAudioData | null> {
-    const tts = customUserVoice?.ttsType ?? this.tts;
+    const tts = ttsType ?? this.tts;
 
     switch (tts) {
       case 'streamlabs':
         return {
           type: 'streamlabs',
-          voice: customUserVoice?.voice ?? this.streamlabs.voice,
+          voice: voice ?? this.streamlabs.voice,
           text,
         };
       case 'tiktok':
         return {
           type: 'tikTok',
-          voice: customUserVoice?.voice ?? this.tikTok.voice,
+          voice: voice ?? this.tikTok.voice,
           text,
         };
       case 'tts-monster':
@@ -350,11 +351,11 @@ export class AudioService {
         };
       case 'azure':
         return await this.handleAzureTts(text);
-      case 'amazon-polly': {
+      case 'amazon-polly':
         return await this.handleAmazonPolly(text);
-      }
       case 'eleven-labs': {
-        const url = `${this.elevenLabsService.apiUrl}/text-to-speech/${customUserVoice?.voice ?? this.elevenLabs.voiceId}`;
+        const voiceId = voice ?? this.elevenLabs.voiceId;
+        const url = `${this.elevenLabsService.apiUrl}/text-to-speech/${voiceId}`;
 
         return {
           type: 'elevenLabs',
@@ -372,23 +373,23 @@ export class AudioService {
     }
   }
 
+  private static arrayBufferToBase64(buffer: ArrayBuffer): string {
+    let binary = '';
+    const bytes = new Uint8Array(buffer);
+    const len = bytes.byteLength;
+
+    for (let i = 0; i < len; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+
+    return window.btoa(binary);
+  }
+
   async handleAzureTts(text: string): Promise<{ type: 'raw', data: string } | null> {
     const config = this.azureTtsService.speechConfig;
 
     if (!config) {
       return null;
-    }
-
-    function arrayBufferToBase64(buffer: ArrayBuffer): string {
-      let binary = '';
-      const bytes = new Uint8Array(buffer);
-      const len = bytes.byteLength;
-
-      for (let i = 0; i < len; i++) {
-        binary += String.fromCharCode(bytes[i]);
-      }
-
-      return window.btoa(binary);
     }
 
     const stream = PullAudioOutputStream.create();
@@ -410,7 +411,7 @@ export class AudioService {
 
       return {
         type: 'raw',
-        data: arrayBufferToBase64(audio.audioData),
+        data: AudioService.arrayBufferToBase64(audio.audioData),
       };
     } catch (e) {
       this.logService.add(`Failed to create Azure TTS synthesis result. ${JSON.stringify(e, null, 2)}`, 'error', 'AudioService.handleAzureTts');
