@@ -17,11 +17,11 @@ import { ElevenLabsService } from './eleven-labs.service';
 import { TwitchSettingsState } from '../state/twitch/twitch.feature';
 import { TwitchService } from './twitch.service';
 import { AzureTtsService } from './azure-tts.service';
-import { AudioConfig, PullAudioOutputStream, SpeechSynthesisResult, SpeechSynthesizer } from 'microsoft-cognitiveservices-speech-sdk';
 import { AzureState } from '../state/azure/azure.feature';
 import { VTubeStudioService } from './vtubestudio.service';
 import { TriggeredExpression } from './vtubestudio.interface';
 import { AwsTtsService } from "./aws-tts.service";
+import { arrayBufferToBase64 } from "../util/helpers";
 
 @Injectable()
 export class AudioService {
@@ -350,7 +350,7 @@ export class AudioService {
           is_ai: this.ttsMonster.ai,
         };
       case 'azure':
-        return await this.handleAzureTts(text);
+        return await this.handleAzureTts(text, voice ?? this.azure.ttsVoice);
       case 'amazon-polly':
         return await this.handleAmazonPolly(text);
       case 'eleven-labs': {
@@ -373,45 +373,12 @@ export class AudioService {
     }
   }
 
-  private static arrayBufferToBase64(buffer: ArrayBuffer): string {
-    let binary = '';
-    const bytes = new Uint8Array(buffer);
-    const len = bytes.byteLength;
-
-    for (let i = 0; i < len; i++) {
-      binary += String.fromCharCode(bytes[i]);
-    }
-
-    return window.btoa(binary);
-  }
-
-  async handleAzureTts(text: string): Promise<{ type: 'raw', data: string } | null> {
-    const config = this.azureTtsService.speechConfig;
-
-    if (!config) {
-      return null;
-    }
-
-    const stream = PullAudioOutputStream.create();
-    const audioConfig = AudioConfig.fromStreamOutput(stream);
-    config.speechSynthesisVoiceName = this.azure.ttsVoice;
-
-    const synth = new SpeechSynthesizer(config, audioConfig);
-    const generateAudio = async (): Promise<SpeechSynthesisResult> => {
-      return new Promise((resolve, reject) => {
-        synth.speakTextAsync(text, r => {
-          synth.close();
-          resolve(r);
-        }, reject);
-      });
-    };
-
+  private async handleAzureTts(text: string, voice: string): Promise<{ type: 'raw', data: string } | null> {
     try {
-      const audio = await generateAudio();
-
+      const audio = await this.azureTtsService.getRawAudio(text, voice);
       return {
         type: 'raw',
-        data: AudioService.arrayBufferToBase64(audio.audioData),
+        data: arrayBufferToBase64(audio),
       };
     } catch (e) {
       this.logService.add(`Failed to create Azure TTS synthesis result. ${JSON.stringify(e, null, 2)}`, 'error', 'AudioService.handleAzureTts');
