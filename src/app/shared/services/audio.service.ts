@@ -352,7 +352,7 @@ export class AudioService {
       case 'azure':
         return await this.handleAzureTts(text, voice ?? this.azure.ttsVoice);
       case 'amazon-polly':
-        return await this.handleAmazonPolly(text);
+        return await this.handleAmazonPolly(text, voice ?? this.amazonPolly.voice);
       case 'eleven-labs': {
         const voiceId = voice ?? this.elevenLabs.voiceId;
         const url = `${this.elevenLabsService.apiUrl}/text-to-speech/${voiceId}`;
@@ -386,12 +386,12 @@ export class AudioService {
     }
   }
 
-  async handleAmazonPolly(audioText: string) {
+  private async handleAmazonPolly(audioText: string, voice: string) {
     try {
       const ttsService = new AwsTtsService(this.amazonPolly, this.logService);
       return {
         type: 'amazonPolly',
-        url: await ttsService.getFileURI(audioText),
+        url: await ttsService.getFileURI(audioText, voice),
       } satisfies RequestAudioData;
     } catch (e) {
       this.snackbar.open(
