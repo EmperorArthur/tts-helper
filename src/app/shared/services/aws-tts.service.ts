@@ -1,7 +1,6 @@
 import { getSynthesizeSpeechUrl } from '@aws-sdk/polly-request-presigner';
-import { PollyClient } from '@aws-sdk/client-polly';
+import { DescribeVoicesCommand, PollyClient, SynthesizeSpeechInput, Voice, VoiceId } from '@aws-sdk/client-polly';
 import { fromCognitoIdentityPool } from '@aws-sdk/credential-providers';
-import { SynthesizeSpeechInput, VoiceId } from '@aws-sdk/client-polly';
 import { XhrHttpHandler } from "@aws-sdk/xhr-http-handler";
 
 import { AmazonPollyData } from "../state/config/config.feature";
@@ -18,7 +17,8 @@ import { Logger } from "@smithy/types";
  */
 export class AwsTtsService {
     private readonly logger: Logger;
-    public readonly pollyConfig: AmazonPollyData;
+    private readonly pollyConfig: AmazonPollyData;
+    private _voices: Voice[] | undefined;
 
     public constructor(pollyConfig: AmazonPollyData, logger: Logger) {
         if (!pollyConfig.poolId) {
@@ -30,7 +30,7 @@ export class AwsTtsService {
     }
 
     private async getCredentials() {
-        return await fromCognitoIdentityPool({
+        const credentials = await fromCognitoIdentityPool({
             logger: this.logger,
             clientConfig: {
                 region: this.pollyConfig.region,
@@ -40,13 +40,42 @@ export class AwsTtsService {
             },
             identityPoolId: this.pollyConfig.poolId.trim(),
         })();
+        this.logger.debug(`Retrieved AWS credentials for identity: ${credentials.identityId}`, 'AwsTtsService');
+        return credentials;
+    }
+
+    private async getClient(): Promise<PollyClient> {
+        this.logger.debug(`Creating PollyClient.`, 'AwsTtsService');
+        return new PollyClient({
+            region: this.pollyConfig.region,
+            credentials: await this.getCredentials(),
+            logger: this.logger,
+            requestHandler: new XhrHttpHandler(),
+        });
     }
 
     /**
-     * All voices supported by Amazon Polly.
+     * All voices supported by Amazon Polly, for all languages, and all engines.
      */
-    public static get availableVoices() {
+    public static get allVoices() {
         return Object.values(VoiceId) as string[];
+    }
+
+    /**
+     * Voices available for synthesis by Amazon Polly, for US English.
+     */
+    public async getAvailableVoices() {
+        if(!this._voices) {
+            const pollyClient = await this.getClient();
+            const command = new DescribeVoicesCommand({
+                LanguageCode: "en-US",
+                IncludeAdditionalLanguageCodes: false,
+            });
+            const response = await pollyClient.send(command);
+            this._voices = response.Voices!;
+            this.logger.debug(`Retrieved ${this._voices.length} voices from Polly.`, 'AwsTtsService');
+        }
+        return this._voices;
     }
 
     /**
@@ -58,7 +87,7 @@ export class AwsTtsService {
      * @throws RangeError if the provided voice is not supported.
      */
     public async getFileURI(audioText: string, voice: string | VoiceId) {
-        if (!AwsTtsService.availableVoices.includes(voice)) {
+        if (!AwsTtsService.allVoices.includes(voice)) {
             throw new RangeError('Invalid voice. Must be one of `AwsTtsService.availableVoices`');
         }
 
@@ -71,22 +100,12 @@ export class AwsTtsService {
         } satisfies SynthesizeSpeechInput;
         this.logger.debug(`pollyParams:\n${JSON.stringify(pollyParams)}`, 'AwsTtsService');
 
-        const credentials = await this.getCredentials();
-        this.logger.debug(`AWS Credentials:\n${JSON.stringify(credentials)}`, 'AwsTtsService');
-
-        const pollyClient = new PollyClient({
-            logger: this.logger,
-            region: this.pollyConfig.region,
-            credentials: credentials,
-            requestHandler: new XhrHttpHandler(),
-        });
-
+        const pollyClient = await this.getClient();
         const url = await getSynthesizeSpeechUrl({
             client: pollyClient,
             params: pollyParams,
         });
         this.logger.debug(`TTS URI: ${url}`, 'AwsTtsService');
-
         return url.toString();
     }
 }
