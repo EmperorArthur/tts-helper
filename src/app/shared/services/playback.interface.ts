@@ -27,7 +27,7 @@ export type RequestAudioData =
   voice: string;
 }
   | {
-  type: 'amazonPolly';
+  type: 'url';
   url: string;
 }
   | {

@@ -390,7 +390,7 @@ export class AudioService {
     try {
       const ttsService = new AwsTtsService(this.amazonPolly, this.logService);
       return {
-        type: 'amazonPolly',
+        type: 'url',
         url: await ttsService.getFileURI(audioText, voice),
       } satisfies RequestAudioData;
     } catch (e) {
